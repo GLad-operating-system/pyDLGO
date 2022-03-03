@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
 
 def get_currtime():
     lt = time.localtime(time.time())
@@ -39,10 +40,12 @@ class Chunk:
         out = str()
         out += "policy: {p} | value: {v}\n".format(p=self.policy, v=self.value)
         return out
+        
+    def set_policy(self, idx):
+        self.policy = np.zeros(NUM_INTESECTIONS+1, dtype=np.float32)
+        self.policy[idx] = 1
 
     def do_symmetry(self, symm=None):
-        assert self.policy != None, ""
-
         if symm == None:
             symm = int(np.random.choice(8, 1)[0])
 
@@ -50,18 +53,20 @@ class Chunk:
             p = self.inputs[i]
             self.inputs[i][:][:] = get_symmetry_plane(symm, p)[:][:]
 
-        if self.policy != NUM_INTESECTIONS:
-            buf = np.zeros(NUM_INTESECTIONS)
-            buf[self.policy] = 1
-            buf = get_symmetry_plane(symm, np.reshape(buf, (BOARD_SIZE, BOARD_SIZE)))
-            self.policy = int(np.argmax(buf))
+        buf = np.zeros(NUM_INTESECTIONS)
+        buf[:] = self.policy[0:NUM_INTESECTIONS]
+        buf = get_symmetry_plane(symm, np.reshape(buf, (BOARD_SIZE, BOARD_SIZE)))
+        self.policy[0:NUM_INTESECTIONS] = np.reshape(buf, (NUM_INTESECTIONS))[:]
 
 class DataSet:
-    def  __init__(self, dir_name):
+    def  __init__(self):
         self.buffer = []
-        self._load_data(dir_name)
 
-    def _load_data(self, dir_name):
+    def resize(self, max_size):
+        while len(self.buffer) > max_size:
+            self.buffer.pop()
+
+    def load_data(self, dir_name):
         # Collect training data from sgf dirctory.
 
         sgf_games = sgf.parse_from_dir(dir_name)
@@ -75,6 +80,7 @@ class DataSet:
             self.buffer.extend(temp)
             if step % verbose_step == 0:
                 print("parsed {:.2f}% games".format(100 * step/total))
+                break;
         if total % verbose_step != 0:
             print("parsed {:.2f}% games".format(100 * step/total))
 
@@ -82,7 +88,7 @@ class DataSet:
         # Collect training data from one sgf game.
 
         temp = []
-        winner = None
+        winner = INVLD
         board = Board(BOARD_SIZE)
         for node in game:
             color = INVLD
@@ -99,15 +105,17 @@ class DataSet:
                     winner = BLACK
                 elif "W+" in result:
                     winner = WHITE
+                else:
+                    winner = EMPTY
             if color != INVLD:
                 chunk = Chunk()
                 chunk.inputs = board.get_features()
                 chunk.to_move = color
-                chunk.policy = self._do_text_move(board, color, move)
+                chunk.set_policy(self._do_text_move(board, color, move))
                 temp.append(chunk)
 
         for chunk in temp:
-            if winner == None:
+            if winner == EMPTY:
                 chunk.value = 0
             elif winner == chunk.to_move:
                 chunk.value = 1
@@ -133,7 +141,7 @@ class DataSet:
         return policy
 
     def get_batches(self, batch_size):
-        # Get the trainig batches from data pool.
+        # Get the training batches from data pool.
 
         s = random.sample(self.buffer, k=batch_size)
         inputs_batch = []
@@ -154,15 +162,14 @@ class DataSet:
         )
 
 class TrainingPipe:
-    def __init__(self, dir_name):
-        self.network = Network(BOARD_SIZE)
-        self.network.trainable()
-
-        # Prepare the data set from sgf files.
-        self.data_set = DataSet(dir_name)
+    def __init__(self, network, data_set):
+        self.network = network
+        self.data_set = data_set
         
     def running(self, max_step, verbose_step, batch_size, learning_rate, noplot):
-        cross_entry = nn.CrossEntropyLoss()
+        def cross_entropy(pred, target):
+            return torch.mean(-torch.sum(torch.mul(F.log_softmax(pred, dim=-1), target), dim=1), dim=0)
+
         mse_loss = nn.MSELoss()
         optimizer = optim.Adam(self.network.parameters(), lr=learning_rate, weight_decay=1e-4)
         p_running_loss = 0
@@ -184,7 +191,7 @@ class TrainingPipe:
             p, v = self.network(inputs)
 
             # Fourth, compute loss result and update network.
-            p_loss = cross_entry(p, target_p)
+            p_loss = cross_entropy(p, target_p)
             v_loss = mse_loss(v, target_v)
             loss = p_loss + v_loss
 
@@ -214,7 +221,7 @@ class TrainingPipe:
                 p_running_loss = 0
                 v_running_loss = 0
                 clock_time = time.time()
-        print("Trainig is over.");
+        print("Training is over.");
         if not noplot:
             self.plot_loss(running_loss_record)
 
@@ -266,7 +273,7 @@ if __name__ == "__main__":
     parser.add_argument("-d", "--dir", metavar="<string>",
                         help="The input directory", type=str)
     parser.add_argument("-s", "--step", metavar="<integer>",
-                        help="The training step", type=int)
+                        help="The training steps", type=int)
     parser.add_argument("-v", "--verbose-step", metavar="<integer>",
                         help="Dump verbose on every X steps.", type=int, default=1000)
     parser.add_argument("-b", "--batch-size", metavar="<integer>",
@@ -282,7 +289,14 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     if valid_args(args):
-        pipe = TrainingPipe(args.dir)
+        # Prepare the data set from sgf files.
+        data_set = DataSet()
+        data_set.load_data(args.dir)
+
+        network = Network(BOARD_SIZE)
+        network.trainable()
+
+        pipe = TrainingPipe(network, data_set)
         pipe.load_weights(args.load_weights)
         pipe.running(args.step, args.verbose_step, args.batch_size, args.learning_rate, args.noplot)
         pipe.save_weights(args.weights_name)

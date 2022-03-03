@@ -320,6 +320,8 @@ class Board(object):
         if v == PASS:
             # The pass move is always legal in any condition.
             return True
+        elif v == RESIGN:
+            return False
         elif v == self.ko or self.state[v] != EMPTY:
             # The move is ko move.
             return False

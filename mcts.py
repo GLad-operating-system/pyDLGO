@@ -4,6 +4,7 @@ from network import Network
 from time_control import TimeControl
 
 import math
+import numpy as np
 
 class Node:
     CPUCT = 0.5 # The PUCT hyperparameter.
@@ -23,6 +24,14 @@ class Node:
     def inverse(self, v):
         # Swap the side to move winrate. 
         return 1 - v;
+
+    def apply_dirichlet(self, alpha=0.3, delta=0.25):
+        size = len(self.children)
+        noisy = np.random.dirichlet(alpha * np.ones(size))
+        i = 0
+        for _, child in self.children.items():
+            child.policy = (1-delta) * child.policy + delta * noisy[i]
+            i += 1
 
     def expand_children(self, board: Board, network: Network):
         if board.last_move == PASS:
@@ -84,11 +93,45 @@ class Node:
         self.values += v
         self.visits += 1
 
+    def get_search_prob(self, board: Board):
+        prob = np.zeros(board.num_intersections + 1, dtype=np.float32)
+        accum = 0
+        for vtx, child in self.children.items():
+            visits = child.visits
+            idx = -1
+            if vtx == PASS:
+                idx = board.num_intersections
+            else:
+                idx = board.vertex_to_index(vtx)
+            accum += visits
+            prob[idx] = visits
+        prob /= accum
+        return prob
+
     def get_best_prob_move(self):
         gather_list = []
         for vtx, child in self.children.items():
             gather_list.append((child.policy, vtx))
         return max(gather_list)[1]
+
+    def get_prob_move(self):
+        # Never select the resign move
+        if self.visits == 1:
+            return self.get_best_prob_move()
+
+        move_list = []
+        prob = []
+        accum = 0
+        for vtx, child in self.children.items():
+            visits = child.visits
+            move_list.append(vtx)
+            prob.append(visits)
+            accum += visits
+        prob = np.array(prob, dtype=np.float32)
+        prob /= accum
+        
+        i = np.random.choice(len(move_list), 1, p=prob)[0]
+        return move_list[i]
 
     def get_best_move(self, resign_threshold):
         # Return best probability move if there are no playouts.
@@ -184,6 +227,37 @@ class Search:
         node.update(value)
 
         return node.inverse(value)
+
+    def selfplay(self, playouts, resign_threshold, random_threshold):
+        # Prepare some basic information.
+        to_move = self.root_board.to_move
+        bsize = self.root_board.board_size
+        move_num = self.root_board.move_num
+
+        # Try to expand the root node first.
+        self._prepare_root_node()
+
+        # Apply dirichlet noise to root node.
+        self.root_node.apply_dirichlet()
+
+        for _ in range(playouts):
+            # Copy the root board because we need to simulate the current board.
+            curr_board = self.root_board.copy()
+            color = curr_board.to_move
+
+            # Start the Monte Carlo tree search.
+            self._descend(color, curr_board, self.root_node)
+
+        vtx = None
+        if random_threshold > move_num:
+            vtx = self.root_node.get_prob_move()
+        else:
+            vtx = self.root_node.get_best_move(resign_threshold)
+
+        features = self.root_board.get_features()
+        prob = self.root_node.get_search_prob(self.root_board)
+
+        return vtx, features, prob
 
     def think(self, playouts, resign_threshold, verbose):
         # Get the best move by Monte carlo tree. The time controller and max playout limit
