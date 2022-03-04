@@ -26,6 +26,7 @@ class Node:
         return 1 - v;
 
     def apply_dirichlet(self, alpha=0.3, delta=0.25):
+        # Apply dirichlet noise to every children.
         size = len(self.children)
         noisy = np.random.dirichlet(alpha * np.ones(size))
         i = 0
@@ -94,6 +95,7 @@ class Node:
         self.visits += 1
 
     def get_search_prob(self, board: Board):
+        # Reture the root search tree probabilities.
         prob = np.zeros(board.num_intersections + 1, dtype=np.float32)
         accum = 0
         for vtx, child in self.children.items():
@@ -237,7 +239,7 @@ class Search:
         # Try to expand the root node first.
         self._prepare_root_node()
 
-        # Apply dirichlet noise to root node.
+        # Apply dirichlet noise to root node in order to learn others moves.
         self.root_node.apply_dirichlet()
 
         for _ in range(playouts):
@@ -250,6 +252,7 @@ class Search:
 
         vtx = None
         if random_threshold > move_num:
+            # Select the random move if it is at the early step.
             vtx = self.root_node.get_prob_move()
         else:
             vtx = self.root_node.get_best_move(resign_threshold)

@@ -157,7 +157,7 @@ class DataSet:
         value_batch = np.array(value_batch)
         return (
             torch.tensor(inputs_batch).float(),
-            torch.tensor(policy_batch).long(),
+            torch.tensor(policy_batch).float(),
             torch.tensor(value_batch).float()
         )
 
@@ -192,6 +192,7 @@ class TrainingPipe:
 
             # Fourth, compute loss result and update network.
             p_loss = cross_entropy(p, target_p)
+
             v_loss = mse_loss(v, target_v)
             loss = p_loss + v_loss
 
@@ -293,10 +294,11 @@ if __name__ == "__main__":
         data_set = DataSet()
         data_set.load_data(args.dir)
 
+        # Allocate the new network
         network = Network(BOARD_SIZE)
         network.trainable()
 
         pipe = TrainingPipe(network, data_set)
-        pipe.load_weights(args.load_weights)
+        pipe.load_weights(args.load_weights) # try to load exist network
         pipe.running(args.step, args.verbose_step, args.batch_size, args.learning_rate, args.noplot)
         pipe.save_weights(args.weights_name)

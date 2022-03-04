@@ -15,7 +15,7 @@ class AlphaZeroPipe:
         self.network = Network(BOARD_SIZE)
         self.data_set = DataSet()
 
-        self.time_control = TimeControl()
+        self.time_control = TimeControl() # ignore
 
         if self.args.load_weights != None:
             self.network.load_pt(self.args.load_weights)
@@ -30,14 +30,15 @@ class AlphaZeroPipe:
                 self.selfplay()
 
                 i+=1
-                print("Played {} games".format(i))
+                if i % 100 == 0:
+                    print("Played {} games".format(i))
 
-            weights_name = "{}/{}_{}".format(args.dir, self.args.weights_name,e)
+            weights_name = "{}/{}_{}".format(args.dir, e, self.args.weights_name)
 
-            self.network.trainable()
+            self.network.trainable(True)
             pipe = TrainingPipe(self.network, self.data_set)
-            pipe.running(args.step, args.verbose_step, args.batch_size, args.learning_rate, True)
-            pipe.save_weights(weights_name)
+            pipe.running(args.step, args.verbose_step, args.batch_size, args.learning_rate, True) # disable plot
+            pipe.save_weights(weights_name) # Save new network every step.
 
     def selfplay(self):
         self.board.reset(self.board.board_size, self.board.komi)
@@ -46,26 +47,28 @@ class AlphaZeroPipe:
         winner = INVLD
 
         temp = []
-        random_threshold = 20
+        random_threshold =  (int)(1.5 * self.board.board_size)
         resign_threshold = self.args.resign_threshold
         resign_probability = self.args.resign_probability
         playouts = self.args.playouts
 
         if np.random.choice(2, 1,
                                 p=[1-resign_probability, resign_probability])[0] == 0:
+            # Disable the resign move if resign_threshold is 0.
             resign_threshold = 0
 
+        # Self-playing...
         while winner == INVLD:
             chunk = Chunk()
             to_move = self.board.to_move
 
             search = Search(self.board, self.network, self.time_control)
-            move, features ,prob = search.selfplay(playouts, resign_threshold, random_threshold)
+            move, features, prob = search.selfplay(playouts, resign_threshold, random_threshold)
             self.board.play(move)
 
             if move == RESIGN:
                 winner = int(to_move == 0)
-            elif  self.board.num_passes >= 2:
+            elif self.board.num_passes >= 2:
                 score = self.board.final_score()
                 if score > 0.1:
                     winner = BLACK
@@ -79,6 +82,7 @@ class AlphaZeroPipe:
             chunk.to_move = to_move
             temp.append(chunk)
 
+        # The game is over. Store the data to the data pool.
         for chunk in temp:
             if winner == EMPTY:
                 chunk.value = 0
@@ -97,7 +101,7 @@ def valid_args(args):
     if args.dir == None:
         print("Must to give the argument --dir <string>")
         result = False
-    if args.weights == None:
+    if args.weights_name == None:
         print("Must to give the argument --weights-name <string>")
         result = False
     if args.step == None:
@@ -126,7 +130,7 @@ if __name__ == "__main__":
     parser.add_argument("-p", "--playouts", metavar="<integer>",
                         help="The number of playouts", type=int, default=400)
     parser.add_argument("-s", "--step", metavar="<integer>",
-                        help="The training steps", type=int)
+                        help="The training steps per epoch", type=int)
     parser.add_argument("-v", "--verbose-step", metavar="<integer>",
                         help="Dump verbose on every X steps.", type=int, default=1000)
     parser.add_argument("-b", "--batch-size", metavar="<integer>",
